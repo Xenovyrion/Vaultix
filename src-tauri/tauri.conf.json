@@ -38,7 +38,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdFRjk4RkZFODkyMkRGNQpSV1QxTFpMby81anZCOWdWV3FpWUVMcmVNcythaG16OUtoYjh1bUc4aElyR21nTUJKZExQM3RsOAo=",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgyNDI2MzVGMUQ4MDdBMjQKUldRa2VvQWRYMk5DZ2p2bXl0R2xQZHhpV1JiQmR1UkgwREphYzd5cW5HRlBEd3FSRXpwSy9oWTQK",
       "endpoints": [
         "https://github.com/LordLuffy/Vaultix/releases/latest/download/latest.json"
       ]
