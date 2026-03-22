@@ -187,9 +187,58 @@ Le workflow `.github/workflows/release.yml` se déclenche automatiquement et :
 3. Génère `latest.json` (endpoint utilisé par le système de mise à jour)
 4. Crée la release GitHub avec tous les fichiers attachés
 
-La release est visible sur : [github.com/LordLuffy/LockSafe/releases](https://github.com/LordLuffy/LockSafe/releases)
+La release est visible sur : [github.com/LordLuffy/Vaultix/releases](https://github.com/LordLuffy/Vaultix/releases)
 
 > **Les utilisateurs existants** recevront une notification de mise à jour au prochain démarrage de l'application.
+
+---
+
+### Re-publier la même release (tag existant)
+
+Si le workflow a échoué ou que tu veux forcer la re-publication d'un tag déjà poussé :
+
+```bash
+# Supprimer le tag en local et sur le remote
+git tag -d v1.0.1
+git push origin :refs/tags/v1.0.1
+
+# Recréer et repousser le tag (relance le workflow)
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+> Sur GitHub, pense aussi à supprimer la release brouillon/incomplète si elle existe :
+> **Releases → Edit → Delete this release** avant de repousser le tag.
+
+---
+
+### Remettre la branche `main` à zéro (historique vierge)
+
+⚠️ **Opération destructive** — l'historique de commits sera effacé définitivement.
+
+```bash
+# Créer une nouvelle branche orpheline (sans historique)
+git checkout --orphan fresh-main
+
+# Stager tous les fichiers actuels
+git add .
+
+# Faire le commit initial
+git commit -m "Initial commit"
+
+# Supprimer l'ancienne branche main
+git branch -D main
+
+# Renommer la branche courante en main
+git branch -m main
+
+# Forcer le push (écrase l'historique distant)
+git push --force origin main
+
+# Remettre le tag si besoin
+git tag v1.0.1
+git push origin v1.0.1
+```
 
 ---
 
