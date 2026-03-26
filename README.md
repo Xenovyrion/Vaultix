@@ -10,7 +10,7 @@
 
 <p align="center">
 <!-- BADGES:START -->
-<img alt="Release" src="https://img.shields.io/github/v/release/Xenovyrion/Teams-Manager?style=for-the-badge" />
+<img alt="Release" src="https://img.shields.io/github/v/release/Xenovyrion/Vaultix?style=for-the-badge" />
 <img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-F4C430?style=for-the-badge" />
 <img alt="Platform" src="https://img.shields.io/badge/Platform-Windows-0078D4?style=for-the-badge&logo=windows11&logoColor=white" />
 <!-- BADGES:END -->
@@ -22,7 +22,6 @@
 <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-000000?style=for-the-badge&logo=rust" />
 <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.5.3-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
 <img alt="React" src="https://img.shields.io/badge/React-18.3.1-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" />
-<img alt="Node.js" src="https://img.shields.io/badge/Node.js-%3E%3D24-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" />
 <img alt="CSS" src="https://img.shields.io/badge/CSS-3-1572B6?style=for-the-badge&logo=css3&logoColor=white" />
 <!-- STACK:END -->
 </p>
