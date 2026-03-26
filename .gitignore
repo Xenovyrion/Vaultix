@@ -1,0 +1,46 @@
+# ── Dépendances ───────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Build outputs ─────────────────────────────────────────────────────────────
+dist/
+src-tauri/target/
+
+# ── Fichiers temporaires Vite ─────────────────────────────────────────────────
+*.local
+
+# ── Clés de signature Tauri (NE JAMAIS committer) ────────────────────────────
+# La clé privée est générée avec : npx tauri signer generate -w ~/.tauri/vaultix.key
+# Elle doit rester dans ~/.tauri/ (hors du repo) et dans les secrets GitHub Actions.
+*.key
+*.pem
+*.p12
+*.pfx
+
+# ── Variables d'environnement ─────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Système d'exploitation ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Claude Code (données locales de session, mémoire, plans) ─────────────────
+.claude/
+
+# ── IDE / éditeurs ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.user
+
+# ── Tauri auto-generated ─────────────────────────────────────────────────────
+src-tauri/gen/schemas/
+
+# ── Rust ─────────────────────────────────────────────────────────────────────
+Cargo.lock.bak

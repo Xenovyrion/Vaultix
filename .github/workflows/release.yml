@@ -1,0 +1,60 @@
+name: Release
+
+# Déclenché quand tu pousses un tag de la forme v1.2.3
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    permissions:
+      contents: write   # nécessaire pour créer la release GitHub
+
+    runs-on: windows-latest
+
+    steps:
+      # 1 — Checkout du code
+      - uses: actions/checkout@v4
+
+      # 2 — Node.js (pour le build Vite / frontend)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # 3 — Rust stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # 4 — Cache Rust pour accélérer les builds suivants
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      # 5 — Dépendances npm
+      - name: Install npm dependencies
+        run: npm ci
+
+      # 6 — Build + sign + release via tauri-action
+      #     Cette action :
+      #       - compile l'app en mode release
+      #       - signe les artefacts avec ta clé privée
+      #       - génère latest.json (endpoint de l'updater)
+      #       - crée la release GitHub et y attache tous les fichiers
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Vaultix ${{ github.ref_name }}"
+          releaseBody: |
+            ## Nouveautés
+            Voir les commits pour le détail des changements.
+          releaseDraft: false
+          prerelease: false
+          # Génère latest.json pointant vers les installers NSIS (Windows)
+          updaterJsonPreferNsis: true
