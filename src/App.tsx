@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type Screen, type DatabaseMeta } from "./types";
 import { useSettings } from "./hooks/useSettings";
 import { addRecentDb } from "./utils/recentDbs";
-import { initLogger, log } from "./utils/logger";
+import { initLogger } from "./utils/logger";
 import SetupScreen from "./components/SetupScreen";
 import UnlockScreen from "./components/UnlockScreen";
 import SecuritySetupScreen from "./components/SecuritySetupScreen";
