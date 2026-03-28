@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { applyTheme } from "../themes";
-import { type ShortcutMap, DEFAULT_SHORTCUTS } from "../types";
+import { type ShortcutMap, DEFAULT_SHORTCUTS, type CipherType } from "../types";
 
 export interface AppSettings {
   themeId: string;
@@ -27,12 +27,14 @@ export interface AppSettings {
   zebraStripes: boolean;  // alternating rows in the list
   // Interface
   recentDbsCount: number; // number of recent vaults to display (3, 5 or 10)
-  systemTrayEnabled: boolean; // show icon in system tray
+  language: string;       // "" = use OS language (auto), otherwise "fr"|"en"|"es"|"de"
   // Debug / logs
   debugMode: boolean;  // enables log file writing
   logPath:   string;   // path to the log file
   // Keyboard shortcuts
   shortcuts: ShortcutMap;
+  // Preferred cipher for new vaults (can be changed on an open vault)
+  preferredCipher: CipherType;
 }
 
 const STORAGE_KEY = "vaultix_settings_v1";
@@ -57,10 +59,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   excludeExpiredFromSearch: true,
   zebraStripes: true,
   recentDbsCount: 5,
-  systemTrayEnabled: false,
+  language: "",
   debugMode: false,
   logPath:   "",
   shortcuts: DEFAULT_SHORTCUTS,
+  preferredCipher: "aes-256-gcm",
 };
 
 export function useSettings() {

@@ -1,6 +1,9 @@
 // ── Entry types ───────────────────────────────────────────────────────────────
 export type EntryType = "login" | "rdp" | "ssh" | "ftp" | "sftp" | "vnc" | "telnet" | "teamviewer" | "other" | "note";
 
+// ── Cipher types ──────────────────────────────────────────────────────────────
+export type CipherType = "aes-256-gcm" | "aes-256-gcm-siv" | "xchacha20";
+
 // ── Entry & Database ──────────────────────────────────────────────────────────
 
 /** A full snapshot of all entry fields before a change. */

@@ -120,14 +120,12 @@ function getEntryTypes(t: TFunction): EntryTypeDef[] {
   ];
 }
 
-export default function EntryPanel({ mode: initialMode, entry, defaultCategory, customTags, tagColors, allFolders, onSaved, onDeleted, onClose, onCopy, onRequestGenerator }: Props) {
+export default function EntryPanel({ mode: initialMode, entry, defaultCategory, customTags, tagColors, allFolders, onSaved, onDeleted: _onDeleted, onClose, onCopy, onRequestGenerator }: Props) {
   const { t } = useTranslation();
   const [mode, setMode] = useState(initialMode);
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [totpCode, setTotpCode] = useState<{ code: string; remaining: number } | null>(null);
+const [totpCode, setTotpCode] = useState<{ code: string; remaining: number } | null>(null);
 
   // Init tags: prefer entry.tags if non-empty, fallback to [entry.category] for old data
   const initTags = (e: PasswordEntry | null) =>
@@ -166,7 +164,6 @@ export default function EntryPanel({ mode: initialMode, entry, defaultCategory, 
     setExtraFields(entry?.extra_fields ?? []);
     setExpiresAt(tsToDate(entry?.expires_at));
     setShowPw(false);
-    setConfirmDelete(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry, initialMode, defaultCategory]);
 
@@ -214,18 +211,6 @@ export default function EntryPanel({ mode: initialMode, entry, defaultCategory, 
     }
   };
 
-  const handleDelete = async () => {
-    if (!entry) return;
-    if (!confirmDelete) { setConfirmDelete(true); return; }
-    setDeleting(true);
-    try {
-      await invoke("delete_entry", { id: entry.id });
-      onDeleted();
-    } finally {
-      setDeleting(false);
-    }
-  };
-
   const handleOpenGenerator = () => {
     onRequestGenerator((pw) => setPassword(pw));
   };
@@ -238,11 +223,6 @@ export default function EntryPanel({ mode: initialMode, entry, defaultCategory, 
       {/* Header */}
       <div className="panel-header">
         <h2>{title_}</h2>
-        <div style={{ display: "flex", gap: 4 }}>
-          <button className="btn-icon" onClick={onClose} title={t("common.close")}>
-            <XIcon size={14} />
-          </button>
-        </div>
       </div>
 
       {/* Body */}
@@ -277,31 +257,19 @@ export default function EntryPanel({ mode: initialMode, entry, defaultCategory, 
       <div className="panel-footer">
         {mode === "view" && entry && (
           <>
-            {confirmDelete ? (
-              <>
-                <span style={{ fontSize: 12, color: "var(--danger)", marginRight: "auto" }}>{t("entry.confirm_delete_question")}</span>
-                <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDelete(false)}>{t("common.cancel")}</button>
-                <button className="btn btn-danger btn-sm" onClick={handleDelete} disabled={deleting}>
-                  {deleting ? "..." : t("common.delete")}
-                </button>
-              </>
-            ) : (
-              <>
-                <button className="btn btn-ghost btn-sm" style={{ marginRight: "auto", color: "var(--danger)" }} onClick={handleDelete}>
-                  <TrashIcon size={13} /> {t("common.delete")}
-                </button>
-                <button className="btn btn-primary btn-sm" onClick={() => setMode("edit")}>
-                  <EditIcon size={13} /> {t("common.edit")}
-                </button>
-              </>
-            )}
+            <button className="btn btn-ghost btn-sm" style={{ marginRight: "auto" }} onClick={onClose}>
+              {t("common.close")}
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => setMode("edit")}>
+              <EditIcon size={13} /> {t("common.edit")}
+            </button>
           </>
         )}
 
         {mode === "edit" && (
           <>
             {!isNew && (
-              <button className="btn btn-ghost btn-sm" style={{ marginRight: "auto" }} onClick={() => setMode("view")}>
+              <button className="btn btn-ghost btn-sm" style={{ marginRight: "auto" }} onClick={() => initialMode === "edit" ? onClose() : setMode("view")}>
                 {t("common.cancel")}
               </button>
             )}
@@ -993,8 +961,6 @@ function EyeIcon({ size = 14 }: { size?: number }) { return <svg width={size} he
 function EyeOffIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>; }
 function CopyIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>; }
 function EditIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>; }
-function XIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>; }
-function TrashIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>; }
 function SaveIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>; }
 function RefreshIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>; }
 function LockIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>; }

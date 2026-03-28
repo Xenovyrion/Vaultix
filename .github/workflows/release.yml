@@ -46,18 +46,25 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Teams Manager ${{ github.ref_name }}'
           releaseBody: |
+            ## ✨ New features :
+              - Add support cipher AES-256-GCM-SIV
+              - Add support cipher XChaCha20-Poly1305
+
             ## ⚡ Improvements / Enhancements :
-              - Refactoring
-              - Disabling the context menu
-              - UI improvements
+              - Add button "Check for leaks" in tab panel
+              - UI Improvements
+              - Improvements to overall performance (main screens, settings, etc.)
 
             ## 🐞 Bug Fixes / Fixes :
-              - Fix translation
+              - The default language is the user's system language (if that language is not available, English)
+              - Fix for language change
+              - Fix navigation in the detail window and edit window
 
             ## 🔐 Security :
-            - Add SECURITY.md
-            - Upgrading vite to v8.0.3
-            - Upgrading @vitejs/plugin-react to v6.0.1 (compatible Vite 8)
+              - Update npm packages
+              - Update Rust crates
+              - Upgrading vite to v8.0.3
+              - Upgrading @vitejs/plugin-react to v6.0.1 (compatible Vite 8)
 
             ## ℹ️ Feedback :
             Please feel free to submit your feedback via [GitHub Issues](https://github.com/Xenovyrion/Vaultix/issues) to help improve future versions.

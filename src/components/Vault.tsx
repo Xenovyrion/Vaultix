@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
@@ -37,6 +37,10 @@ interface FolderNode { name: string; path: string; children: FolderNode[]; }
 
 const DEFAULT_CATEGORIES = ["Travail", "Personnel", "Social"];
 
+// Pure helper — defined outside component so it never causes re-renders
+const entryMatchesTag = (e: PasswordEntry, cat: string) =>
+  e.tags.includes(cat) || e.category === cat;
+
 // Protocol type display metadata — kept in sync with ENTRY_TYPES in EntryPanel
 const TYPE_META: Record<string, { label: string; color: string }> = {
   login:  { label: "Web",    color: "#3b82f6" },
@@ -69,7 +73,7 @@ const [search, setSearch] = useState("");
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [typeFilter, setTypeFilter] = useState<EntryType | "all">("all");
   const [pendingDelete, setPendingDelete] = useState<PasswordEntry | null>(null);
-  const lastClickTime = useRef<Record<string, number>>({});
+
   const searchRef = useRef<HTMLInputElement>(null);
   const [copiedEntry, setCopiedEntry] = useState<PasswordEntry | null>(null);
   const clipboardClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -85,6 +89,19 @@ const [search, setSearch] = useState("");
   const [showChangelog, setShowChangelog] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateChecked, setUpdateChecked] = useState<"idle" | "up_to_date" | "error">("idle");
+
+  // ── HIBP per-row breach status ────────────────────────────────────────────────
+  const [hibpStatuses, setHibpStatuses] = useState<Record<string, "idle" | "checking" | number>>({});
+
+  // ── Password visibility per row ───────────────────────────────────────────────
+  const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(new Set());
+  const togglePasswordVisibility = useCallback((id: string) => {
+    setVisiblePasswords(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
 
   // Check on startup (5 s delay to avoid blocking startup)
   useEffect(() => {
@@ -283,10 +300,10 @@ const loadEntries = useCallback(async () => {
   }, [settings.shortcuts, selectedId, copiedEntry, panelMode,
       contextMenu, pendingDelete, showGenerator, showSettings, generatorCallback]);
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(""), 2000);
-  };
+  }, []);
 
   // ── Auto-backup ────────────────────────────────────────────────────────────
   const runBackupIfDue = useCallback(() => {
@@ -306,9 +323,9 @@ const loadEntries = useCallback(async () => {
         })
         .catch(e => showToast(t("vault.backup_failed", { error: e })));
     }
-  }, [ // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
     settings.backupEnabled, settings.backupPath, settings.backupIntervalHours,
-    settings.backupMaxCount, settings.backupNamePattern, dbPath,
+    settings.backupMaxCount, settings.backupNamePattern, dbPath, showToast, t,
   ]);
 
   // Periodic timer — checks every 60 s whether a backup is due
@@ -318,7 +335,7 @@ const loadEntries = useCallback(async () => {
     return () => clearInterval(timer);
   }, [settings.backupEnabled, settings.backupPath, settings.backupIntervalHours, runBackupIfDue]);
 
-  const scheduleClipboardClear = () => {
+  const scheduleClipboardClear = useCallback(() => {
     if (clipboardClearTimer.current) clearTimeout(clipboardClearTimer.current);
     if (settings.clipboardClearSeconds > 0) {
       clipboardClearTimer.current = setTimeout(() => {
@@ -326,17 +343,17 @@ const loadEntries = useCallback(async () => {
         clipboardClearTimer.current = null;
       }, settings.clipboardClearSeconds * 1000);
     }
-  };
+  }, [settings.clipboardClearSeconds]);
 
-  const copyToClipboard = async (text: string, label: string) => {
+  const copyToClipboard = useCallback(async (text: string, label: string) => {
     await writeText(text);
     scheduleClipboardClear();
     const suffix = settings.clipboardClearSeconds > 0
       ? t("vault.copied_suffix", { seconds: settings.clipboardClearSeconds }) : "";
     showToast(`${label} ${t("vault.copy_suffix_title")}${suffix}`);
-  };
+  }, [scheduleClipboardClear, settings.clipboardClearSeconds, t, showToast]);
 
-  const duplicateEntry = async (entry: PasswordEntry) => {
+  const duplicateEntry = useCallback(async (entry: PasswordEntry) => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { id, created_at, updated_at, strength, ...rest } = entry;
@@ -344,15 +361,11 @@ const loadEntries = useCallback(async () => {
       await loadEntries();
       showToast(t("vault.entry_duplicated"));
     } catch {}
-  };
+  }, [loadEntries, showToast, t]);
 
-  // Match entry to tag: checks both new tags[] and legacy category field
-  const entryMatchesTag = (e: PasswordEntry, cat: string) =>
-    e.tags.includes(cat) || e.category === cat;
+  const nowTs = useMemo(() => Math.floor(Date.now() / 1000), []);
 
-  const nowTs = Math.floor(Date.now() / 1000);
-
-  const filtered = entries.filter(e => {
+  const filtered = useMemo(() => entries.filter(e => {
     if (category === "favorites" && !e.favorite) return false;
     if (category === "expired" && !(e.expires_at && e.expires_at < nowTs)) return false;
     if (category !== "all" && category !== "favorites" && category !== "reused" && category !== "expired" && !entryMatchesTag(e, category)) return false;
@@ -373,31 +386,32 @@ const loadEntries = useCallback(async () => {
     }
     return true;
   }).sort((a, b) => {
-const dir = sort.dir === "asc" ? 1 : -1;
+    const dir = sort.dir === "asc" ? 1 : -1;
     if (sort.field === "updated_at" || sort.field === "strength") {
       return ((a[sort.field] as number) - (b[sort.field] as number)) * dir;
     }
     return String(a[sort.field] ?? "").localeCompare(String(b[sort.field] ?? "")) * dir;
-  });
+  }), [entries, category, search, sort, settings.excludeExpiredFromSearch, selectedFolder, typeFilter, nowTs]);
 
   // Keep refs in sync so shortcut handler always reads current values
   filteredRef.current = filtered;
   entriesRef.current  = entries;
 
-  const allCategories = [...DEFAULT_CATEGORIES, ...settings.customCategories];
+  const allCategories = useMemo(
+    () => [...DEFAULT_CATEGORIES, ...settings.customCategories],
+    [settings.customCategories]
+  );
 
   // Build a tree from entry folder paths
-  const folderTree = (() => {
+  const folderTree = useMemo(() => {
     const nodeMap = new Map<string, FolderNode>();
     const roots: FolderNode[] = [];
-    // Collect all intermediate paths from entries
     const allPaths = new Set<string>();
     for (const e of entries) {
       if (!e.folder) continue;
       const parts = e.folder.split("/").filter(Boolean);
       for (let i = 1; i <= parts.length; i++) allPaths.add(parts.slice(0, i).join("/"));
     }
-    // Build tree sorted alphabetically
     for (const path of [...allPaths].sort()) {
       const parts = path.split("/");
       const name = parts[parts.length - 1];
@@ -411,22 +425,40 @@ const dir = sort.dir === "asc" ? 1 : -1;
       }
     }
     return roots;
-  })();
+  }, [entries]);
   const hasFolders = folderTree.length > 0;
 
   // Flat sorted list of all folder paths (for FolderPicker in EntryPanel)
-  const allFolderPaths = [...new Set(entries.map(e => e.folder ?? "").filter(Boolean))].sort();
-  const folderEntryCount = (path: string): number =>
-    entries.filter(e => (e.folder ?? "") === path || (e.folder ?? "").startsWith(path + "/")).length;
-  const toggleFolderNode = (path: string) =>
+  const allFolderPaths = useMemo(
+    () => [...new Set(entries.map(e => e.folder ?? "").filter(Boolean))].sort(),
+    [entries]
+  );
+
+  // Precomputed folder entry counts — O(n) once, O(1) per lookup
+  const folderCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const e of entries) {
+      const f = e.folder ?? "";
+      if (!f) continue;
+      const parts = f.split("/").filter(Boolean);
+      for (let i = 1; i <= parts.length; i++) {
+        const p = parts.slice(0, i).join("/");
+        map.set(p, (map.get(p) ?? 0) + 1);
+      }
+    }
+    return map;
+  }, [entries]);
+  const folderEntryCount = useCallback((path: string): number => folderCountMap.get(path) ?? 0, [folderCountMap]);
+
+  const toggleFolderNode = useCallback((path: string) =>
     setExpandedFolderNodes(prev => {
       const next = new Set(prev);
       next.has(path) ? next.delete(path) : next.add(path);
       return next;
-    });
+    }), []);
 
   // Group entries by password to detect reuse
-  const reusedGroups = (() => {
+  const reusedGroups = useMemo(() => {
     const byPw = new Map<string, PasswordEntry[]>();
     for (const e of entries) {
       if (!e.password) continue;
@@ -435,19 +467,38 @@ const dir = sort.dir === "asc" ? 1 : -1;
       byPw.set(e.password, group);
     }
     return [...byPw.values()].filter(g => g.length >= 2);
-  })();
-  const reusedEntryIds = new Set(reusedGroups.flat().map(e => e.id));
+  }, [entries]);
 
-  const countFor = (cat: Category) => {
-    if (cat === "all") return entries.length;
-    if (cat === "favorites") return entries.filter(e => e.favorite).length;
-    if (cat === "reused") return reusedEntryIds.size;
-    if (cat === "expired") return entries.filter(e => e.expires_at && e.expires_at < nowTs).length;
-    return entries.filter(e => entryMatchesTag(e, cat)).length;
-  };
-  const expiredCount = countFor("expired");
+  const reusedEntryIds = useMemo(
+    () => new Set(reusedGroups.flat().map(e => e.id)),
+    [reusedGroups]
+  );
 
-  const openEntry = async (entry: PasswordEntry) => {
+  // Precomputed category counts — O(n) once per entries change
+  const counts = useMemo(() => {
+    const favorites = entries.filter(e => e.favorite).length;
+    const expired = entries.filter(e => e.expires_at && e.expires_at < nowTs).length;
+    const byTag: Record<string, number> = {};
+    for (const e of entries) {
+      for (const tag of e.tags) { byTag[tag] = (byTag[tag] ?? 0) + 1; }
+      if (e.category && !e.tags.includes(e.category)) {
+        byTag[e.category] = (byTag[e.category] ?? 0) + 1;
+      }
+    }
+    return { all: entries.length, favorites, reused: reusedEntryIds.size, expired, byTag };
+  }, [entries, reusedEntryIds, nowTs]);
+
+  const countFor = useCallback((cat: Category) => {
+    if (cat === "all") return counts.all;
+    if (cat === "favorites") return counts.favorites;
+    if (cat === "reused") return counts.reused;
+    if (cat === "expired") return counts.expired;
+    return counts.byTag[cat] ?? 0;
+  }, [counts]);
+
+  const expiredCount = counts.expired;
+
+  const openEntry = useCallback(async (entry: PasswordEntry) => {
     const raw = entry.url?.trim();
     if (!raw) return;
     const type = entry.entry_type ?? "login";
@@ -515,54 +566,67 @@ const dir = sort.dir === "asc" ? 1 : -1;
         if (proto) openUrl(proto.buildUrl(raw)).catch(() => {});
       }
     }
-  };
+  }, [copyToClipboard, scheduleClipboardClear, settings.clipboardClearSeconds, showToast, t]);
 
-  const toggleSort = (field: SortField) =>
-    setSort(s => s.field === field ? { field, dir: s.dir === "asc" ? "desc" : "asc" } : { field, dir: "asc" });
+  const toggleSort = useCallback((field: SortField) =>
+    setSort(s => s.field === field ? { field, dir: s.dir === "asc" ? "desc" : "asc" } : { field, dir: "asc" }), []);
 
-  const setPresetSort = (field: SortField, dir: SortDir) =>
-    setSort({ field, dir });
+  const setPresetSort = useCallback((field: SortField, dir: SortDir) =>
+    setSort({ field, dir }), []);
 
-  const handleRowClick = (entry: PasswordEntry) => {
-    const now = Date.now();
-    const last = lastClickTime.current[entry.id] ?? 0;
-    if (now - last < 400) {
-      if (entry.url) openEntry(entry);
-    } else {
-      setSelectedId(entry.id);
-      setPanelMode("view");
-    }
-    lastClickTime.current[entry.id] = now;
-    setContextMenu(null);
-  };
-
-  const handleContextMenu = (e: React.MouseEvent, entry: PasswordEntry) => {
+  const handleContextMenu = useCallback((e: React.MouseEvent, entry: PasswordEntry) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, entry });
-  };
+  }, []);
 
 // Quick-save an entry with partial field updates (no panel needed)
-  const quickSave = async (entry: PasswordEntry, patch: { tags?: string[]; folder?: string; favorite?: boolean }) => {
+  const checkHibpRow = async (entry: PasswordEntry) => {
+    if (!entry.password) return;
+    setHibpStatuses(prev => ({ ...prev, [entry.id]: "checking" }));
+    try {
+      const count = await invoke<number>("check_hibp_password", { password: entry.password });
+      setHibpStatuses(prev => ({ ...prev, [entry.id]: count }));
+      const msg = count > 0
+        ? `⚠ ${t("entry.hibp_pwned", { count })}`
+        : `✓ ${t("entry.hibp_safe")}`;
+      setToast(msg);
+      setTimeout(() => setToast(""), 3500);
+    } catch {
+      setHibpStatuses(prev => ({ ...prev, [entry.id]: -1 }));
+      setToast(t("entry.hibp_error"));
+      setTimeout(() => setToast(""), 3500);
+    }
+  };
+
+  const quickSave = (entry: PasswordEntry, patch: { tags?: string[]; folder?: string; favorite?: boolean }) => {
     const newTags = patch.tags ?? entry.tags;
-    await invoke("save_entry", {
+    const updated = {
+      ...entry,
+      ...patch,
+      tags: newTags,
+      category: newTags[0] ?? entry.category,
+    };
+    // Optimistic update — instant visual feedback, no round-trip wait
+    setEntries(prev => prev.map(e => e.id === entry.id ? updated : e));
+    // Background save — fire and forget; revert on failure
+    invoke("save_entry", {
       entry: {
-        id: entry.id,
-        expires_at: entry.expires_at ?? null,
-        title: entry.title,
-        username: entry.username,
-        password: entry.password,
-        url: entry.url,
-        notes: entry.notes,
-        category: newTags[0] ?? entry.category,
-        folder: patch.folder ?? entry.folder ?? "",
-        tags: newTags,
-        totp_secret: entry.totp_secret,
-        favorite: patch.favorite ?? entry.favorite,
-        entry_type: entry.entry_type ?? "login",
-        extra_fields: entry.extra_fields ?? [],
+        id: updated.id,
+        expires_at: updated.expires_at ?? null,
+        title: updated.title,
+        username: updated.username,
+        password: updated.password,
+        url: updated.url,
+        notes: updated.notes,
+        category: updated.category,
+        folder: updated.folder ?? "",
+        tags: updated.tags,
+        totp_secret: updated.totp_secret,
+        favorite: updated.favorite,
+        entry_type: updated.entry_type ?? "login",
+        extra_fields: updated.extra_fields ?? [],
       },
-    });
-    await loadEntries();
+    }).catch(() => loadEntries()); // revert to real state if save fails
   };
 
 const selectedEntry = entries.find(e => e.id === selectedId) ?? null;
@@ -869,15 +933,16 @@ const selectedEntry = entries.find(e => e.id === selectedId) ?? null;
             <table className="entry-table">
               <thead>
                 <tr>
-                  <th style={{ width: 28 }}></th>{/* star */}
-                  <th onClick={() => toggleSort("title")}>
+                  <th style={{ width: 30 }}></th>{/* star */}
+                  <th style={{ width: 180 }} onClick={() => toggleSort("title")}>
                     {t("vault.sort_title")} {sort.field === "title" ? (sort.dir === "asc" ? "▲" : "▼") : ""}
                   </th>
-                  <th onClick={() => toggleSort("username")}>{t("vault.sort_username")} {sort.field === "username" ? (sort.dir === "asc" ? "▲" : "▼") : ""}</th>
-                  <th onClick={() => toggleSort("url")}>URL</th>
-                  <th onClick={() => toggleSort("strength")}>{t("vault.sort_strength")} {sort.field === "strength" ? (sort.dir === "asc" ? "▲" : "▼") : ""}</th>
-                  <th onClick={() => toggleSort("updated_at")}>{t("vault.sort_updated")} {sort.field === "updated_at" ? (sort.dir === "asc" ? "▲" : "▼") : ""}</th>
-                  <th style={{ width: 80 }}>{t("vault.col_actions")}</th>
+                  <th style={{ width: 145 }} onClick={() => toggleSort("url")}>{t("vault.sort_url")} {sort.field === "url" ? (sort.dir === "asc" ? "▲" : "▼") : ""}</th>
+                  <th style={{ width: 135 }} onClick={() => toggleSort("username")}>{t("vault.sort_username")} {sort.field === "username" ? (sort.dir === "asc" ? "▲" : "▼") : ""}</th>
+                  <th style={{ width: 210 }}>{t("entry.password")}</th>
+                  <th style={{ width: 130 }} onClick={() => toggleSort("strength")}>{t("vault.sort_strength")} {sort.field === "strength" ? (sort.dir === "asc" ? "▲" : "▼") : ""}</th>
+                  <th style={{ width: 80 }} onClick={() => toggleSort("updated_at")}>{t("vault.sort_updated")} {sort.field === "updated_at" ? (sort.dir === "asc" ? "▲" : "▼") : ""}</th>
+                  <th style={{ width: 100 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -885,10 +950,9 @@ const selectedEntry = entries.find(e => e.id === selectedId) ?? null;
                   <tr
                     key={entry.id}
                     className={selectedId === entry.id ? "selected" : ""}
-                    onClick={() => handleRowClick(entry)}
                     onContextMenu={e => handleContextMenu(e, entry)}
                     style={{
-                      cursor: "pointer",
+                      cursor: "default",
                       ...(settings.zebraStripes && rowIdx % 2 === 1 && selectedId !== entry.id
                         ? { background: "var(--zebra-bg)" } : {}),
                     }}
@@ -965,41 +1029,89 @@ const selectedEntry = entries.find(e => e.id === selectedId) ?? null;
                         </div>
                       </div>
                     </td>
-                    <td title={entry.username || undefined}>{entry.username || "—"}</td>
-                    <td>
+                    <td onClick={e => e.stopPropagation()}>
                       {entry.url ? (
-                        <UrlCell url={entry.url} entryType={entry.entry_type ?? "login"} onOpen={() => openEntry(entry)} onCopy={() => copyToClipboard(entry.url, "URL")} />
+                        <UrlCell url={entry.url} entryType={entry.entry_type ?? "login"} onOpen={() => openEntry(entry)} />
+                      ) : <span style={{ color: "var(--text-3)" }}>—</span>}
+                    </td>
+                    <td onClick={e => e.stopPropagation()}>
+                      {entry.username ? (
+                        <span
+                          style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
+                          title={t("vault.context_copy_username") + " — " + entry.username}
+                          onClick={() => copyToClipboard(entry.username, t("entry.username"))}
+                        >
+                          {entry.username}
+                        </span>
+                      ) : <span style={{ color: "var(--text-3)" }}>—</span>}
+                    </td>
+                    <td onClick={e => e.stopPropagation()}>
+                      {entry.password ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <button
+                            className="btn-icon"
+                            title={visiblePasswords.has(entry.id) ? t("entry.hide_password") : t("entry.show_password")}
+                            onClick={() => togglePasswordVisibility(entry.id)}
+                          >
+                            {visiblePasswords.has(entry.id) ? <EyeOffIcon size={13} /> : <EyeIcon size={13} />}
+                          </button>
+                          <button
+                            className="btn-icon"
+                            title={t("entry.hibp_check")}
+                            disabled={hibpStatuses[entry.id] === "checking"}
+                            onClick={e => { e.stopPropagation(); checkHibpRow(entry); }}
+                          >
+                            {hibpStatuses[entry.id] === "checking"
+                              ? <span className="spinner" style={{ width: 10, height: 10 }} />
+                              : <ShieldIcon size={13} />}
+                          </button>
+                          <span
+                            style={{
+                              fontFamily: "monospace",
+                              fontSize: 12,
+                              letterSpacing: "0.06em",
+                              flex: 1,
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              cursor: "pointer",
+                              color: visiblePasswords.has(entry.id) ? "var(--text-1)" : "var(--text-3)",
+                            }}
+                            title={t("vault.context_copy_password")}
+                            onClick={() => copyToClipboard(entry.password, t("entry.password"))}
+                          >
+                            {visiblePasswords.has(entry.id) ? entry.password : "••••••••"}
+                          </span>
+                        </div>
                       ) : <span style={{ color: "var(--text-3)" }}>—</span>}
                     </td>
                     <td><StrengthBadge score={entry.strength} /></td>
                     <td>{formatDate(entry.updated_at)}</td>
-                    <td onClick={e => e.stopPropagation()} style={{ width: 110, paddingRight: 10 }}>
+                    <td onClick={e => e.stopPropagation()} style={{ paddingRight: 10 }}>
                       <div style={{ display: "flex", gap: 2, justifyContent: "flex-end", alignItems: "center" }}>
-                        {/* Open */}
                         <button
                           className="btn-icon"
-                          title={entry.url
-                            ? (entry.entry_type === "rdp" ? t("vault.open_rdp")
-                              : entry.entry_type === "ssh" ? t("vault.open_ssh")
-                              : entry.entry_type === "ftp" ? t("vault.open_ftp")
-                              : entry.entry_type === "sftp" ? t("vault.open_sftp")
-                              : entry.entry_type === "vnc" ? t("vault.open_vnc")
-                              : entry.entry_type === "telnet" ? t("vault.open_telnet")
-                              : t("vault.open_browser"))
-                            : t("vault.no_url")}
-                          disabled={!entry.url}
-                          style={{ opacity: entry.url ? 1 : 0.25 }}
-                          onClick={() => openEntry(entry)}
+                          title={t("common.view_details")}
+                          onClick={e => { e.stopPropagation(); setSelectedId(entry.id); setPanelMode("view"); }}
                         >
-                          <ExternalIcon size={15} />
+                          <InfoIcon size={15} />
                         </button>
-                        {/* Copy dropdown */}
-                        <CopyDropdown entry={entry} onCopy={copyToClipboard} />
-                        {/* Actions */}
-                        <ActionsButton entry={entry} onContextMenu={(e2, en) => {
-                          e2.preventDefault();
-                          setContextMenu({ x: e2.clientX, y: e2.clientY, entry: en });
-                        }} />
+                        <button
+                          className="btn-icon"
+                          title={t("common.edit")}
+                          onClick={e => { e.stopPropagation(); setSelectedId(entry.id); setPanelMode("edit"); }}
+                        >
+                          <EditIcon size={15} />
+                        </button>
+                        <button
+                          className="btn-icon"
+                          title={t("common.delete")}
+                          style={{ color: "var(--danger, #ef4444)" }}
+                          onClick={e => { e.stopPropagation(); setPendingDelete(entry); }}
+                        >
+                          <TrashIcon size={15} />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1050,17 +1162,6 @@ const selectedEntry = entries.find(e => e.id === selectedId) ?? null;
             }}
             onClick={e => e.stopPropagation()}
           >
-            <ContextMenuItem
-              icon={<UserIcon size={13} />}
-              label={t("vault.context_copy_username")}
-              disabled={!contextMenu.entry.username}
-              onClick={() => { copyToClipboard(contextMenu.entry.username, t("entry.username")); setContextMenu(null); }}
-            />
-            <ContextMenuItem
-              icon={<CopyIcon size={13} />}
-              label={t("vault.context_copy_password")}
-              onClick={() => { copyToClipboard(contextMenu.entry.password, t("entry.password")); setContextMenu(null); }}
-            />
             {contextMenu.entry.totp_secret && (
               <ContextMenuItem
                 icon={<TotpIcon size={13} />}
@@ -1074,14 +1175,7 @@ const selectedEntry = entries.find(e => e.id === selectedId) ?? null;
                 }}
               />
             )}
-            {contextMenu.entry.url && (
-              <ContextMenuItem
-                icon={<ExternalIcon size={13} />}
-                label={t("vault.context_open")}
-                onClick={() => { openEntry(contextMenu.entry); setContextMenu(null); }}
-              />
-            )}
-            <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+            {contextMenu.entry.totp_secret && <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />}
             <ContextMenuItem
               icon={<EditIcon size={13} />}
               label={t("common.edit")}
@@ -1194,24 +1288,27 @@ function ContextMenuItem({ icon, label, onClick, disabled, danger }: {
 }
 
 // ── URL cell ──────────────────────────────────────────────────────────────────
-function UrlCell({ url, onOpen, onCopy: _onCopy }: { url: string; entryType?: string; onOpen: () => void; onCopy: () => void }) {
+function UrlCell({ url, entryType, onOpen }: { url: string; entryType?: string; onOpen: () => void }) {
   const { t } = useTranslation();
-  // Show a clean host / address — strip scheme for display
   const isHttp = url.startsWith("http://") || url.startsWith("https://") || (!url.includes("://") && url.includes("."));
   const host = isHttp ? getDisplayHost(url) : url.replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "");
+  const openTitle = entryType === "rdp" ? t("vault.open_rdp")
+    : entryType === "ssh" ? t("vault.open_ssh")
+    : entryType === "ftp" ? t("vault.open_ftp")
+    : entryType === "sftp" ? t("vault.open_sftp")
+    : entryType === "vnc" ? t("vault.open_vnc")
+    : entryType === "telnet" ? t("vault.open_telnet")
+    : t("vault.open_browser");
   return (
-    <div
-      style={{ display: "flex", alignItems: "center", gap: 6 }}
-      title={t("vault.double_click_open")}
-      onDoubleClick={e => { e.stopPropagation(); onOpen(); }}
-    >
-      <span style={{ color: "var(--accent)", fontSize: 12,
-        maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+    <span
+      style={{ color: "var(--accent)", fontSize: 12,
+        display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         cursor: "pointer" }}
-      >
-        {host}
-      </span>
-    </div>
+      title={openTitle + " — " + url}
+      onClick={e => { e.stopPropagation(); onOpen(); }}
+    >
+      {host}
+    </span>
   );
 }
 
@@ -1247,132 +1344,6 @@ function StrengthBadge({ score }: { score: number }) {
   );
 }
 
-// ── Copy dropdown ──────────────────────────────────────────────────────────────
-function CopyDropdown({ entry, onCopy }: {
-  entry: PasswordEntry;
-  onCopy: (text: string, label: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const [dropPos, setDropPos] = useState({ right: 0, top: 0 });
-  const chevronRef = useRef<HTMLButtonElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const handleToggle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!open && chevronRef.current) {
-      const rect = chevronRef.current.getBoundingClientRect();
-      setDropPos({ right: window.innerWidth - rect.right, top: rect.bottom + 4 });
-    }
-    setOpen(o => !o);
-  };
-
-  const items: { label: string; value: string }[] = [];
-  const type = entry.entry_type ?? "login";
-  if (type === "ssh") {
-    if (entry.username) items.push({ label: t("entry.username"), value: entry.username });
-    const priv = entry.extra_fields?.find(([k]) => k === "private_key")?.[1] ?? "";
-    const pub  = entry.extra_fields?.find(([k]) => k === "public_key")?.[1]  ?? "";
-    if (priv) items.push({ label: t("entry.privateKey"), value: priv });
-    if (pub)  items.push({ label: t("entry.publicKey"), value: pub });
-  } else if (type === "note") {
-    if (entry.notes) items.push({ label: t("vault.content"), value: entry.notes });
-  } else {
-    if (entry.username) items.push({ label: t("entry.username"), value: entry.username });
-    if (entry.password) items.push({ label: t("entry.password"), value: entry.password });
-  }
-
-  const primary = items[0];
-
-  return (
-    <div ref={containerRef} style={{ position: "relative", display: "flex" }} className="copy-split">
-      <button
-        className="btn-icon"
-        title={primary ? `${t("common.copy")} ${primary.label.toLowerCase()}` : t("common.copy")}
-        disabled={!primary}
-        style={{ opacity: primary ? 1 : 0.25 }}
-        onClick={e => { e.stopPropagation(); if (primary) onCopy(primary.value, primary.label); }}
-      >
-        <CopyIcon size={15} />
-      </button>
-      <button
-        ref={chevronRef}
-        className="btn-icon"
-        title={t("vault.more_options")}
-        onClick={handleToggle}
-      >
-        <ChevronDownIcon size={10} />
-      </button>
-      {open && items.length > 0 && (
-        <div style={{
-          position: "fixed",
-          right: dropPos.right,
-          top: dropPos.top,
-          zIndex: 1200,
-          background: "var(--bg-card)",
-          border: "1px solid var(--border-light)",
-          borderRadius: 8,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
-          padding: 4,
-          minWidth: 210,
-        }}>
-          {items.map(item => (
-            <button
-              key={item.label}
-              style={{
-                display: "flex", alignItems: "center", gap: 8,
-                width: "100%", padding: "7px 10px",
-                border: "none", background: "none", borderRadius: 5,
-                cursor: "pointer", fontSize: 13, textAlign: "left",
-                color: "var(--text-1)", fontFamily: "inherit",
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "none"; }}
-              onClick={e => { e.stopPropagation(); onCopy(item.value, item.label); setOpen(false); }}
-            >
-              <CopyIcon size={13} />
-              {t("common.copy")} {item.label.toLowerCase()}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Actions button (three dots) ────────────────────────────────────────────────
-function ActionsButton({ entry, onContextMenu }: {
-  entry: PasswordEntry;
-  onContextMenu: (e: React.MouseEvent, entry: PasswordEntry) => void;
-}) {
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const handleClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (btnRef.current) {
-      const rect = btnRef.current.getBoundingClientRect();
-      // Fake a mouse event at the bottom-left of the button
-      onContextMenu(
-        { ...e, clientX: rect.right, clientY: rect.bottom, preventDefault: () => {} } as React.MouseEvent,
-        entry
-      );
-    }
-  };
-  return (
-    <button ref={btnRef} className="btn-icon" title="Actions" onClick={handleClick}>
-      <DotsIcon size={15} />
-    </button>
-  );
-}
-
 // ── Icons ─────────────────────────────────────────────────────────────────────
 function GridIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>; }
 function StarIcon({ size = 14, style }: { size?: number; style?: React.CSSProperties }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>; }
@@ -1385,9 +1356,13 @@ function CopyIcon({ size = 14 }: { size?: number }) { return <svg width={size} h
 function EditIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>; }
 function SettingsIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>; }
 function TotpIcon({ size = 14, style }: { size?: number; style?: React.CSSProperties }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>; }
-function UserIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>; }
+
 function ExternalIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>; }
+function ShieldIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>; }
+function EyeIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>; }
+function EyeOffIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>; }
 function TrashIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>; }
+function InfoIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="8"/><line x1="12" y1="12" x2="12" y2="16"/></svg>; }
 
 function AlertIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>; }
 function ClockExpiredIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><line x1="18" y1="18" x2="21" y2="21"/></svg>; }
@@ -1395,13 +1370,7 @@ function FolderIcon({ size = 14 }: { size?: number }) { return <svg width={size}
 function FolderOpenIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="1 11 22 11"/></svg>; }
 function ChevronRightIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>; }
 function ChevronDownIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>; }
-function DotsIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" stroke="none">
-      <circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/>
-    </svg>
-  );
-}
+
 
 function RefreshSidebarIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>; }
 function SpinSidebarIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>; }

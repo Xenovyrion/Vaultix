@@ -1,5 +1,6 @@
 mod crypto;
 mod database;
+use crypto::CipherId;
 mod generator;
 mod updater;
 
@@ -7,11 +8,8 @@ use database::{DatabaseMeta, PasswordEntry, Vault};
 use generator::{GeneratorOptions, GeneratorResult};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, State};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, State};
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -22,22 +20,6 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         AppState { vault: Mutex::new(Vault::default()) }
-    }
-}
-
-// ── Tray state ────────────────────────────────────────────────────────────────
-
-pub struct TrayState {
-    pub icon: Mutex<Option<tauri::tray::TrayIcon>>,
-    pub enabled: AtomicBool,
-}
-
-impl Default for TrayState {
-    fn default() -> Self {
-        TrayState {
-            icon: Mutex::new(None),
-            enabled: AtomicBool::new(false),
-        }
     }
 }
 
@@ -101,12 +83,29 @@ fn create_database(
     path: String,
     name: String,
     master_password: String,
+    cipher: Option<String>,
 ) -> Result<(), String> {
-    app_log(&format!("[DB] create_database: path={} name={}", path, name));
+    let cipher_id = cipher
+        .as_deref()
+        .map(CipherId::from_str)
+        .transpose()?
+        .unwrap_or(CipherId::Gcm);
+    app_log(&format!("[DB] create_database: path={} name={} cipher={}", path, name, cipher_id.as_str()));
     let mut vault = state.vault.lock().unwrap();
-    let r = vault.create(&path, &name, &master_password);
+    let r = vault.create(&path, &name, &master_password, cipher_id);
     app_log(&format!("[DB] create_database => {}", if r.is_ok() { "OK" } else { r.as_ref().unwrap_err() }));
     r
+}
+
+#[tauri::command]
+fn change_cipher(state: State<AppState>, cipher: String) -> Result<(), String> {
+    let cipher_id = CipherId::from_str(&cipher)?;
+    app_log(&format!("[DB] change_cipher: {}", cipher_id.as_str()));
+    let mut vault = state.vault.lock().unwrap();
+    if !vault.is_open() {
+        return Err("Vault is locked.".into());
+    }
+    vault.change_cipher(cipher_id)
 }
 
 #[tauri::command]
@@ -361,7 +360,7 @@ fn setup_totp_unlock_init(
 
     use rand::RngCore;
     let mut sb = [0u8; 20];
-    rand::thread_rng().fill_bytes(&mut sb);
+    rand::rng().fill_bytes(&mut sb);
 
     let totp = TOTP::new(
         Algorithm::SHA1, 6, 1, 30,
@@ -401,7 +400,7 @@ fn setup_totp_unlock_confirm(
     drop(vault);
 
     // Decode secret
-    let secret_bytes = base32::decode(Alphabet::RFC4648 { padding: false }, &secret)
+    let secret_bytes = base32::decode(Alphabet::Rfc4648 { padding: false }, &secret)
         .ok_or("Secret TOTP invalide.")?;
 
     let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret_bytes, None, "vaultix".to_string())
@@ -460,7 +459,7 @@ fn unlock_with_totp(state: State<AppState>, totp_code: String) -> Result<(), Str
         .get_password()
         .map_err(|_| "TOTP non configuré pour cette base.".to_string())?;
 
-    let secret_bytes = base32::decode(Alphabet::RFC4648 { padding: false }, &secret_b32)
+    let secret_bytes = base32::decode(Alphabet::Rfc4648 { padding: false }, &secret_b32)
         .ok_or("Secret TOTP corrompu.")?;
 
     let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret_bytes, None, "vaultix".to_string())
@@ -491,7 +490,7 @@ async fn check_hibp_password(password: String) -> Result<u64, String> {
 
     let mut hasher = Sha1::new();
     hasher.update(password.as_bytes());
-    let hash = format!("{:X}", hasher.finalize());
+    let hash: String = hasher.finalize().iter().map(|b| format!("{:02X}", b)).collect();
     let prefix = &hash[..5];
     let suffix = &hash[5..];
 
@@ -773,44 +772,6 @@ fn open_log_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
     app.opener().open_path(&path, None::<&str>).map_err(|e| e.to_string())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Show or hide the system tray icon. Called from the frontend when the setting changes.
-/// When enabled, also removes the window from the taskbar so only the tray icon is visible.
-#[tauri::command]
-fn set_tray_visible(app: tauri::AppHandle, visible: bool) {
-    app_log(&format!("set_tray_visible(visible={})", visible));
-
-    let state = app.state::<TrayState>();
-    state.enabled.store(visible, Ordering::Relaxed);
-    let guard = state.icon.lock().unwrap();
-    if let Some(icon) = guard.as_ref() {
-        let r = icon.set_visible(visible);
-        app_log(&format!("  tray icon set_visible => {:?}", r));
-    }
-    drop(guard);
-    // Remove/restore window taskbar entry when tray is toggled
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_skip_taskbar(visible);
-        app_log(&format!("  set_skip_taskbar({})", visible));
-        // If disabling tray, restore window if it was minimised to tray
-        // Note: is_visible() returns true for minimised windows, so check both.
-        if !visible {
-            let hidden    = !w.is_visible().unwrap_or(true);
-            let minimised = w.is_minimized().unwrap_or(false);
-            app_log(&format!("  disabling tray: window hidden={} minimised={}", hidden, minimised));
-            if hidden || minimised {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
-                app_log("  -> unminimized + show + focus");
-            }
-        }
-    } else {
-        app_log("  WARNING: get_webview_window('main') returned None");
-    }
-}
-
 // ── App entry point ───────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -822,93 +783,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
-        .manage(TrayState::default())
         .manage(DebugState::default())
-        .setup(|app| {
-            // ── Build tray menu ───────────────────────────────────────────────
-            let show_i = MenuItem::with_id(app, "show", "Ouvrir Vaultix", true, None::<&str>)?;
-            let lock_i = MenuItem::with_id(app, "lock", "Verrouiller", true, None::<&str>)?;
-            let sep   = PredefinedMenuItem::separator(app)?;
-            let quit_i = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &lock_i, &sep, &quit_i])?;
-
-            // ── Create tray icon (hidden by default) ──────────────────────────
-            let mut builder = TrayIconBuilder::new()
-                .tooltip("Vaultix")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    app_log(&format!("TrayMenuEvent: id={}", event.id.as_ref()));
-                    match event.id.as_ref() {
-                        "show" => {
-                            let r = app.emit("tray-show", ());
-                            app_log(&format!("  emit tray-show => {:?}", r));
-                        }
-                        "lock" => { let _ = app.emit("tray-lock", ()); }
-                        "quit" => app.exit(0),
-                        _ => {}
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    // On Windows a double-click fires two Click(Up) events then DoubleClick.
-                    // Emit a show event for any left-button-up or double-click; the JS handler
-                    // does the actual show/focus so Windows focus rules are respected.
-                    let event_name = match &event {
-                        TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }   => "Click(Left,Up)",
-                        TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Down, .. } => "Click(Left,Down)",
-                        TrayIconEvent::Click { .. }           => "Click(Other)",
-                        TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => "DoubleClick(Left)",
-                        TrayIconEvent::DoubleClick { .. }     => "DoubleClick(Other)",
-                        TrayIconEvent::Enter { .. }           => "Enter",
-                        TrayIconEvent::Move  { .. }           => "Move",
-                        TrayIconEvent::Leave { .. }           => "Leave",
-                        _ => "Unknown",
-                    };
-                    let should_show = matches!(event_name, "Click(Left,Up)" | "DoubleClick(Left)");
-                    app_log(&format!("TrayIconEvent: {} should_show={}", event_name, should_show));
-                    if should_show {
-                        let r = tray.app_handle().emit("tray-show", ());
-                        app_log(&format!("  emit tray-show => {:?}", r));
-                    }
-                });
-
-            if let Some(icon) = app.default_window_icon().cloned() {
-                builder = builder.icon(icon);
-            }
-
-            let tray = builder.build(app)?;
-            // Hidden by default — JS will call set_tray_visible(true) if enabled
-            let _ = tray.set_visible(false);
-            *app.state::<TrayState>().icon.lock().unwrap() = Some(tray);
-
-            // ── Close-to-tray: intercept window close when tray is enabled ────
-            let app_handle = app.handle().clone();
-            if let Some(window) = app.get_webview_window("main") {
-                let window_clone = window.clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        let enabled = app_handle
-                            .state::<TrayState>()
-                            .enabled
-                            .load(Ordering::Relaxed);
-                        app_log(&format!("WindowEvent::CloseRequested tray_enabled={}", enabled));
-                        if enabled {
-                            api.prevent_close();
-                            app_log("  prevent_close + set_skip_taskbar(true) + minimize()");
-                            // Do NOT call hide() — it suspends the WebView2 IPC bus on
-                            // Windows (Chrome_WidgetWin_0 Error 1412) which prevents the
-                            // "tray-show" event from reaching the JS listener.
-                            // minimize() keeps the V8 runtime alive so events still fire.
-                            let r_skip = window_clone.set_skip_taskbar(true);
-                            let r_min  = window_clone.minimize();
-                            app_log(&format!("  set_skip_taskbar={:?}  minimize={:?}", r_skip, r_min));
-                        }
-                    }
-                });
-            }
-
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             get_app_state,
             create_database,
@@ -937,8 +812,8 @@ pub fn run() {
             file_exists,
             verify_master_password,
             change_master_password,
+            change_cipher,
             open_connection,
-            set_tray_visible,
             set_debug_mode,
             write_log,
             get_default_log_path,

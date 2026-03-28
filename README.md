@@ -90,7 +90,7 @@ Vaultix/
 |-------|------------|
 | Frontend | React 18 + TypeScript |
 | Backend | Rust (Tauri 2) |
-| Encryption | AES-256-GCM (`aes-gcm`) |
+| Encryption | AES-256-GCM / AES-256-GCM-SIV / XChaCha20-Poly1305 (user choice) |
 | KDF | Argon2id (`argon2`) |
 | TOTP | `totp-rs` |
 | Biometrics | `keyring` (Windows Credential Manager) |
@@ -135,7 +135,11 @@ cargo deny check
 ## 5. Features
 
 ### Security
-- **AES-256-GCM encryption** with built-in authentication (AEAD)
+- **Configurable AEAD cipher** — choose between three algorithms:
+  - **AES-256-GCM** — NIST FIPS 197 standard, hardware-accelerated (AES-NI), de-facto default
+  - **AES-256-GCM-SIV** (RFC 8452) — nonce-misuse resistant variant of GCM; confidentiality preserved even if a nonce is reused
+  - **XChaCha20-Poly1305** — 192-bit nonce stream cipher, no hardware dependency, constant-time; used by WireGuard and Signal
+- Changing the cipher re-encrypts the open vault on save; existing vaults (v1 format) are auto-detected and opened transparently
 - **Argon2id key derivation** resistant to GPU/ASIC and rainbow table attacks (configurable KDF parameters)
 - **gzip compression** of data before encryption (optional)
 - **Breach detection** via the HaveIBeenPwned API (k-anonymity — the password never leaves the device)
@@ -169,7 +173,6 @@ cargo deny check
 - 13 built-in themes: Dark, Light, Nord, Dracula, Catppuccin, Ocean, Forest, Tokyo Night, Solarized, Gruvbox, Monokai, Rose Pine, Solarized Light
 - Full colour customisation (real-time colour picker)
 - Tags with customisable colours
-- System tray icon (close = minimise, not quit)
 - Fully configurable keyboard shortcuts
 
 ### Backup

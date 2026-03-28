@@ -1,7 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type Screen, type DatabaseMeta } from "./types";
 import { useSettings } from "./hooks/useSettings";
 import { addRecentDb } from "./utils/recentDbs";
@@ -80,37 +78,6 @@ export default function App() {
     initLogger(settings.debugMode, settings.logPath);
   }, [settings.debugMode, settings.logPath]);
 
-  // Sync system tray visibility whenever the setting changes
-  useEffect(() => {
-    log("App", `systemTrayEnabled changed → ${settings.systemTrayEnabled}`);
-    invoke("set_tray_visible", { visible: settings.systemTrayEnabled }).catch(() => {});
-  }, [settings.systemTrayEnabled]);
-
-  // Listen for lock trigger from tray menu
-  useEffect(() => {
-    const unlisten = listen("tray-lock", () => { handleLock(); });
-    return () => { unlisten.then(fn => fn()); };
-  }, [handleLock]);
-
-  // Listen for show trigger from tray click/double-click.
-  // Window is minimized (not hidden) when sent to tray, so unminimize() is the
-  // correct restore call. show() is also called as a safety net.
-  useEffect(() => {
-    const unlisten = listen("tray-show", async () => {
-      log("App", "tray-show event received → unminimize + show + setFocus");
-      const win = getCurrentWindow();
-      try {
-        await win.unminimize(); // restore from minimized state (close-to-tray behaviour)
-        await win.show();       // safety net in case it was hidden for another reason
-        await win.setFocus();
-        log("App", "tray-show: window restored successfully");
-      } catch (err) {
-        log("App", `tray-show ERROR: ${err}`);
-      }
-    });
-    return () => { unlisten.then(fn => fn()); };
-  }, []);
-
   const handleCloseDatabase = useCallback(async () => {
     await invoke("close_database");
     setDbPath(null);
@@ -133,6 +100,7 @@ export default function App() {
         onOpened={handleDatabaseOpened}
         onCreatedAndUnlocked={handleCreatedAndUnlocked}
         recentDbsCount={settings.recentDbsCount}
+        preferredCipher={settings.preferredCipher}
       />
     );
   }

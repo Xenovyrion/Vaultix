@@ -1,4 +1,4 @@
-use rand::seq::SliceRandom;
+use rand::seq::{IndexedRandom, SliceRandom};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -193,7 +193,7 @@ fn gen_charset(opts: &CharsetOptions) -> Result<GeneratorResult, String> {
         return Err("Jeu de caractères vide.".into());
     }
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut required: Vec<u8> = Vec::new();
     let pick_one = |pool: &[u8], rng: &mut rand::rngs::ThreadRng| -> u8 {
         *pool.choose(rng).unwrap()
@@ -205,7 +205,7 @@ fn gen_charset(opts: &CharsetOptions) -> Result<GeneratorResult, String> {
 
     let mut password: Vec<u8> = required;
     while password.len() < opts.length {
-        let c = charset[rng.gen_range(0..charset.len())];
+        let c = charset[rng.random_range(0..charset.len())];
         if opts.exclude_ambiguous && AMBIGUOUS.contains(&(c as char)) { continue; }
         password.push(c);
     }
@@ -219,7 +219,7 @@ fn gen_passphrase(opts: &PassphraseOptions) -> Result<GeneratorResult, String> {
     if opts.word_count < 2 {
         return Err("Au moins 2 mots requis.".into());
     }
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut words: Vec<String> = (0..opts.word_count)
         .map(|_| {
             let w = WORDS.choose(&mut rng).unwrap();
@@ -236,11 +236,11 @@ fn gen_passphrase(opts: &PassphraseOptions) -> Result<GeneratorResult, String> {
         .collect();
 
     if opts.append_number {
-        words.push(format!("{:02}", rng.gen_range(0..100)));
+        words.push(format!("{:02}", rng.random_range(0..100)));
     }
     if opts.append_symbol {
         let sym = [b'!', b'@', b'#', b'$', b'%', b'&', b'*', b'+', b'?'];
-        words.push((sym[rng.gen_range(0..sym.len())] as char).to_string());
+        words.push((sym[rng.random_range(0..sym.len())] as char).to_string());
     }
 
     let pw = words.join(&opts.separator);
@@ -255,7 +255,7 @@ fn gen_pattern(opts: &PatternOptions) -> Result<GeneratorResult, String> {
     if opts.pattern.is_empty() {
         return Err("Motif vide.".into());
     }
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut result = String::new();
     let mut chars = opts.pattern.chars().peekable();
     let mut char_count = 0usize;
@@ -270,24 +270,24 @@ fn gen_pattern(opts: &PatternOptions) -> Result<GeneratorResult, String> {
                 }
             }
             'x' => {
-                result.push(LOWERCASE[rng.gen_range(0..LOWERCASE.len())] as char);
+                result.push(LOWERCASE[rng.random_range(0..LOWERCASE.len())] as char);
                 avg_charset *= 26.0; char_count += 1;
             }
             'X' => {
-                result.push(UPPERCASE[rng.gen_range(0..UPPERCASE.len())] as char);
+                result.push(UPPERCASE[rng.random_range(0..UPPERCASE.len())] as char);
                 avg_charset *= 26.0; char_count += 1;
             }
             'd' => {
-                result.push(DIGITS[rng.gen_range(0..DIGITS.len())] as char);
+                result.push(DIGITS[rng.random_range(0..DIGITS.len())] as char);
                 avg_charset *= 10.0; char_count += 1;
             }
             's' => {
-                result.push(SYMBOLS[rng.gen_range(0..SYMBOLS.len())] as char);
+                result.push(SYMBOLS[rng.random_range(0..SYMBOLS.len())] as char);
                 avg_charset *= SYMBOLS.len() as f64; char_count += 1;
             }
             '*' => {
                 let all: Vec<u8> = [UPPERCASE, LOWERCASE, DIGITS, SYMBOLS].concat();
-                result.push(all[rng.gen_range(0..all.len())] as char);
+                result.push(all[rng.random_range(0..all.len())] as char);
                 avg_charset *= all.len() as f64; char_count += 1;
             }
             other => { result.push(other); char_count += 1; }

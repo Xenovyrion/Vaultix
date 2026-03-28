@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-use crate::crypto;
+use crate::crypto::{self, CipherId};
 
 // ── Data model ────────────────────────────────────────────────────────────────
 
@@ -78,13 +78,26 @@ struct DatabaseFile {
 
 // ── Runtime vault ─────────────────────────────────────────────────────────────
 
-#[derive(Default)]
 pub struct Vault {
     pub path: Option<String>,
     pub meta: Option<DatabaseMeta>,
     pub entries: Vec<PasswordEntry>,
     /// The master password kept only as long as the vault is unlocked.
     master_password: Option<String>,
+    /// Cipher currently used by this vault (detected from the file header on unlock).
+    pub cipher: CipherId,
+}
+
+impl Default for Vault {
+    fn default() -> Self {
+        Vault {
+            path: None,
+            meta: None,
+            entries: vec![],
+            master_password: None,
+            cipher: CipherId::Gcm,
+        }
+    }
 }
 
 impl Vault {
@@ -93,7 +106,7 @@ impl Vault {
     }
 
     /// Create a brand-new database and write it to `path`.
-    pub fn create(&mut self, path: &str, name: &str, master_password: &str) -> Result<(), String> {
+    pub fn create(&mut self, path: &str, name: &str, master_password: &str, cipher: CipherId) -> Result<(), String> {
         let now = Utc::now().timestamp();
         let meta = DatabaseMeta {
             name: name.to_string(),
@@ -102,17 +115,18 @@ impl Vault {
             modified_at: now,
             entry_count: 0,
             kdf: "argon2id".into(),
-            cipher: "aes-256-gcm".into(),
+            cipher: cipher.as_str().into(),
         };
         let db = DatabaseFile { meta: meta.clone(), entries: vec![] };
         let json = serde_json::to_vec(&db).map_err(|e| e.to_string())?;
-        let file_bytes = crypto::build_encrypted_file(master_password, &json)?;
+        let file_bytes = crypto::build_encrypted_file(master_password, &json, cipher)?;
         std::fs::write(path, &file_bytes).map_err(|e| e.to_string())?;
 
         self.path = Some(path.to_string());
         self.meta = Some(meta);
         self.entries = vec![];
         self.master_password = Some(master_password.to_string());
+        self.cipher = cipher;
         Ok(())
     }
 
@@ -127,13 +141,15 @@ impl Vault {
 
     /// Unlock the vault with the master password.
     pub fn unlock(&mut self, master_password: &str) -> Result<(), String> {
-        let path = self.path.as_ref().ok_or("Aucune base de données sélectionnée.")?;
-        let data = std::fs::read(path).map_err(|e| format!("Lecture fichier: {e}"))?;
+        let path = self.path.as_ref().ok_or("No database selected.").map_err(|e| e.to_string())?;
+        let data = std::fs::read(path).map_err(|e| format!("Read file: {e}"))?;
+        let cipher = crypto::detect_cipher(&data)?;
         let plaintext = crypto::decrypt_file(master_password, &data)?;
         let db: DatabaseFile = serde_json::from_slice(&plaintext).map_err(|e| format!("JSON: {e}"))?;
         self.meta = Some(db.meta);
         self.entries = db.entries;
         self.master_password = Some(master_password.to_string());
+        self.cipher = cipher;
         Ok(())
     }
 
@@ -154,21 +170,29 @@ impl Vault {
 
     /// Persist current state to disk.
     pub fn save(&mut self) -> Result<(), String> {
-        let path = self.path.as_ref().ok_or("Pas de chemin de fichier.")?;
-        let pw = self.master_password.as_ref().ok_or("Vault verrouillé.")?;
+        let path = self.path.as_ref().ok_or("No file path.").map_err(|e| e.to_string())?;
+        let pw = self.master_password.as_ref().ok_or("Vault locked.").map_err(|e| e.to_string())?;
+        let cipher = self.cipher;
         let now = Utc::now().timestamp();
         if let Some(meta) = &mut self.meta {
             meta.modified_at = now;
             meta.entry_count = self.entries.len();
+            meta.cipher = cipher.as_str().into();
         }
         let db = DatabaseFile {
             meta: self.meta.clone().unwrap(),
             entries: self.entries.clone(),
         };
         let json = serde_json::to_vec(&db).map_err(|e| e.to_string())?;
-        let file_bytes = crypto::build_encrypted_file(pw, &json)?;
+        let file_bytes = crypto::build_encrypted_file(pw, &json, cipher)?;
         std::fs::write(path, &file_bytes).map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// Re-encrypt the database with a new cipher (keeps the same master password).
+    pub fn change_cipher(&mut self, new_cipher: CipherId) -> Result<(), String> {
+        self.cipher = new_cipher;
+        self.save()
     }
 
     pub fn get_entries(&self) -> &[PasswordEntry] {

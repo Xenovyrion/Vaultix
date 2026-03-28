@@ -269,12 +269,15 @@ html, body, #root {
 .entry-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: auto;
   padding: 0;
 }
 
 .entry-table {
   width: 100%;
+  min-width: 980px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 .entry-table thead tr {
@@ -316,8 +319,6 @@ html, body, #root {
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 240px;
 }
 
 /* title-cell is a <div> inside <td>, not the <td> itself */

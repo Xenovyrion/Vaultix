@@ -10,6 +10,7 @@ interface Props {
   onOpened: (path: string) => void;
   onCreatedAndUnlocked: (path: string, masterPassword: string) => void;
   recentDbsCount?: number; // max number of recent vaults to display (default 5)
+  preferredCipher?: string; // cipher to use when creating a new vault (default "aes-256-gcm")
 }
 
 type Tab = "create" | "open";
@@ -58,7 +59,7 @@ function truncatePath(path: string, maxLen = 48): string {
   return "…" + sep + filename;
 }
 
-export default function SetupScreen({ onCreated: _onCreated, onOpened, onCreatedAndUnlocked, recentDbsCount = 5 }: Props) {
+export default function SetupScreen({ onCreated: _onCreated, onOpened, onCreatedAndUnlocked, recentDbsCount = 5, preferredCipher = "aes-256-gcm" }: Props) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("open");
   const [recentDbs, setRecentDbs] = useState<RecentDb[]>(() => getRecentDbs());
@@ -97,7 +98,7 @@ export default function SetupScreen({ onCreated: _onCreated, onOpened, onCreated
 
     setCreating(true);
     try {
-      await invoke("create_database", { path, name: dbName, masterPassword: masterPw });
+      await invoke("create_database", { path, name: dbName, masterPassword: masterPw, cipher: preferredCipher });
       // Unlock immediately so we can register biometric/TOTP without going through unlock screen
       await invoke("unlock_database", { masterPassword: masterPw });
       onCreatedAndUnlocked(path, masterPw);

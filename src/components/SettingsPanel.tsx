@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import i18n from "../i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { type AppSettings, DEFAULT_SETTINGS } from "../hooks/useSettings";
 import { THEME_PRESETS, EDITABLE_VARS, applyTheme } from "../themes";
@@ -23,17 +24,27 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose, dbP
   const [dirty, setDirty] = useState(false);
   const { t } = useTranslation();
 
-  const update = (patch: Partial<AppSettings>) => {
-    const next = { ...draft, ...patch };
-    setDraft(next);
+  const update = useCallback((patch: Partial<AppSettings>) => {
+    setDraft(prev => {
+      const next = { ...prev, ...patch };
+      // Live preview for theme changes — direct DOM mutation, safe inside setter
+      if (patch.themeId !== undefined || patch.customThemeVars !== undefined) {
+        applyTheme(next.themeId, next.customThemeVars);
+      }
+      return next;
+    });
     setDirty(true);
-    // Live preview for theme changes
-    if (patch.themeId !== undefined || patch.customThemeVars !== undefined) {
-      applyTheme(next.themeId, next.customThemeVars);
-    }
-  };
+  }, []); // stable reference — no deps needed with functional setDraft
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    // Re-encrypt the open vault if the cipher changed
+    if (draft.preferredCipher !== settings.preferredCipher) {
+      try { await invoke("change_cipher", { cipher: draft.preferredCipher }); } catch { /* vault may not be open */ }
+    }
+    // Apply language change only on save
+    if (draft.language && draft.language !== settings.language) {
+      i18n.changeLanguage(draft.language);
+    }
     onSettingsChange(draft);
     setDirty(false);
   };
@@ -252,6 +263,9 @@ function SecuriteTab({ draft, update }: { draft: AppSettings; update: (p: Partia
       : String(draft.lockTimeoutMinutes)
   );
 
+  // Cipher "see more" expansion state
+  const [expandedCipher, setExpandedCipher] = useState<string | null>(null);
+
   // Change master password state
   const [showChangePw, setShowChangePw] = useState(false);
   const [cpCurrent, setCpCurrent] = useState("");
@@ -374,17 +388,59 @@ function SecuriteTab({ draft, update }: { draft: AppSettings; update: (p: Partia
 
       <div className="divider" />
 
-      {/* Security info */}
-      <div className="info-msg" style={{ fontSize: 12 }}>
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>{t("settings.security.encryption_title")}</div>
-        <div style={{ lineHeight: 1.7 }}>
-          {t("settings.security.encryption_desc")}
+      {/* Encryption cipher */}
+      <SettingRow icon={<ShieldIcon size={15} />} label={t("settings.security.cipher_title")} description={t("settings.security.cipher_desc")}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {([
+            { id: "aes-256-gcm",     label: "AES-256-GCM",       note: t("settings.security.cipher_gcm_note"),     more: t("settings.security.cipher_gcm_more") },
+            { id: "aes-256-gcm-siv", label: "AES-256-GCM-SIV",   note: t("settings.security.cipher_gcm_siv_note"), more: t("settings.security.cipher_gcm_siv_more") },
+            { id: "xchacha20",       label: "XChaCha20-Poly1305", note: t("settings.security.cipher_xchacha_note"), more: t("settings.security.cipher_xchacha_more") },
+          ] as const).map(c => {
+            const active = (draft.preferredCipher ?? "aes-256-gcm") === c.id;
+            const expanded = expandedCipher === c.id;
+            return (
+              <div key={c.id} style={{ borderRadius: 8, border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`, background: active ? "var(--accent-dim)" : "transparent", transition: "border-color 0.15s, background 0.15s", overflow: "hidden" }}>
+                <div
+                  onClick={() => update({ preferredCipher: c.id })}
+                  style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 12px", cursor: "pointer" }}
+                >
+                  <div style={{
+                    width: 14, height: 14, borderRadius: "50%", flexShrink: 0, marginTop: 2,
+                    border: `2px solid ${active ? "var(--accent)" : "var(--text-3)"}`,
+                    background: active ? "var(--accent)" : "transparent",
+                    transition: "border-color 0.15s, background 0.15s",
+                  }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: active ? 600 : 400, color: active ? "var(--text-1)" : "var(--text-2)" }}>
+                      {c.label}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>{c.note}</div>
+                  </div>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={e => { e.stopPropagation(); setExpandedCipher(expanded ? null : c.id); }}
+                    style={{ fontSize: 10, padding: "2px 7px", flexShrink: 0, alignSelf: "center" }}
+                  >
+                    {expanded ? t("common.see_less") : t("common.see_more")}
+                  </button>
+                </div>
+                {expanded && (
+                  <div style={{ padding: "0 12px 10px 36px", fontSize: 11.5, color: "var(--text-2)", lineHeight: 1.7, borderTop: "1px solid var(--border)" }}>
+                    <div style={{ paddingTop: 8 }}>{c.more}</div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div className="info-msg" style={{ fontSize: 11 }}>
+            {t("settings.security.cipher_tip")}
+          </div>
         </div>
-      </div>
+      </SettingRow>
 
       <div className="divider" />
 
-      {/* KDF params */}
+      {/* Key Derivation (Argon2id) */}
       <SettingRow icon={<ShieldIcon size={15} />} label={t("settings.security.kdf_title")} description={t("settings.security.kdf_desc")}>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div className="field-group">
@@ -1254,29 +1310,14 @@ function SystemeTab({ draft, update, onReset }: { draft: AppSettings; update: (p
           {(["fr", "en", "es", "de"] as const).map(code => (
             <button
               key={code}
-              onClick={() => i18n.changeLanguage(code)}
-              className={i18n.language.startsWith(code) ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}
+              onClick={() => update({ language: code })}
+              className={(draft.language || i18n.language).startsWith(code) ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}
             >
               {t(`languages.${code}`)}
             </button>
           ))}
         </div>
       </SettingRow>
-      <div className="divider" />
-
-      {/* System tray */}
-      <SettingRow icon={<TrayIconSvg size={15} />} label={t("settings.system.tray")} description={t("settings.system.tray_desc")}>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => update({ systemTrayEnabled: true })} className={draft.systemTrayEnabled ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}>{t("common.enabled_f")}</button>
-          <button onClick={() => update({ systemTrayEnabled: false })} className={!draft.systemTrayEnabled ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}>{t("common.disabled_f")}</button>
-        </div>
-        {draft.systemTrayEnabled && (
-          <div style={{ fontSize: 11, color: "var(--text-2)" }}>
-            {t("settings.system.tray_enabled_desc")}
-          </div>
-        )}
-      </SettingRow>
-
       <div className="divider" />
 
       {/* Debug / logs */}
@@ -1382,7 +1423,10 @@ function ShortcutsSection({ draft, update }: { draft: AppSettings; update: (p: P
     "copy_password", "copy_username", "open_entry",
     "copy_entry", "paste_entry",
   ];
-  const sc: ShortcutMap = { ...DEFAULT_SHORTCUTS, ...(draft.shortcuts ?? {}) };
+  const sc = useMemo<ShortcutMap>(
+    () => ({ ...DEFAULT_SHORTCUTS, ...(draft.shortcuts ?? {}) }),
+    [draft.shortcuts]
+  );
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [conflict, setConflict] = useState<ShortcutAction | null>(null);
 
@@ -1519,7 +1563,6 @@ function MinimizeIcon({ size = 14 }: { size?: number }) { return <svg width={siz
 function ClockXIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><line x1="15" y1="9" x2="19" y2="13"/><line x1="19" y1="9" x2="15" y2="13"/></svg>; }
 function StripesIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/></svg>; }
 function HistoryIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>; }
-function TrayIconSvg({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M12 14V3"/><polyline points="8 7 12 3 16 7"/><circle cx="18" cy="18" r="1" fill="currentColor" stroke="none"/></svg>; }
 function BugIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2l1.88 1.88"/><path d="M14.12 3.88L16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6z"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>; }
 function RefreshIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>; }
 function GlobeIcon({ size = 14 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>; }

@@ -1,6 +1,6 @@
 [package]
 name = "vaultix"
-version = "1.0.4"
+version = "1.1.0"
 description = "Vaultix - Gestionnaire de mots de passe sécurisé"
 authors = []
 edition = "2021"
@@ -13,7 +13,7 @@ name = "vaultix_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-tauri                          = { version = "2", features = ["tray-icon"] }
+tauri                          = { version = "2", features = [] }
 tauri-plugin-dialog            = "2"
 tauri-plugin-fs                = "2"
 tauri-plugin-opener            = "2"
@@ -25,14 +25,16 @@ serde_json  = "1"
 tokio       = { version = "1", features = ["full"] }
 
 # Cryptography
-aes-gcm = "0.10"
+aes-gcm     = "0.10"
+aes-gcm-siv = "0.11"
+chacha20poly1305 = "0.10"
 argon2  = "0.5"
-rand    = "0.8"
+rand    = "0.9"
 zeroize = { version = "1", features = ["derive"] }
 
 # TOTP
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
-base32  = "0.4"
+base32  = "0.5"
 
 # Utilities
 uuid    = { version = "1", features = ["v4"] }
@@ -42,8 +44,8 @@ chrono  = { version = "0.4", features = ["serde"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 # HTTP + HIBP breach detection
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-sha1    = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+sha1    = "0.11"
 
 [profile.release]
 panic         = "abort"
